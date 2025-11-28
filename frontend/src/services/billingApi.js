@@ -1,10 +1,11 @@
-const API_URL = "http://localhost:5000/api"; // Base API URL
+// Updated to use centralized API configuration
+import { billingAPI, inventoryAPI } from "./api";
 
-// Fetch all sales
+// Fetch all sales (from billing endpoint for backward compatibility)
 export const getSales = async () => {
     try {
-        const response = await fetch(`${API_URL}/sales`);
-        return await response.json();
+        const response = await billingAPI.getAll();
+        return response.data.sales || response.data || [];
     } catch (error) {
         console.error("Error fetching sales:", error);
         return [];
@@ -14,36 +15,30 @@ export const getSales = async () => {
 // Add a sale
 export const addSale = async (saleData) => {
     try {
-        const response = await fetch(`${API_URL}/sales`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(saleData),
-        });
-        return await response.json();
+        const response = await billingAPI.create(saleData);
+        return response.data.sale || response.data;
     } catch (error) {
         console.error("Error adding sale:", error);
-        return null;
+        throw error;
     }
 };
 
 // Delete a sale
 export const deleteSale = async (id) => {
     try {
-        const response = await fetch(`${API_URL}/sales/${id}`, {
-            method: "DELETE",
-        });
-        return await response.json();
+        await billingAPI.delete(id);
+        return true;
     } catch (error) {
         console.error("Error deleting sale:", error);
-        return null;
+        throw error;
     }
 };
 
 // Fetch inventory data
 export const getInventory = async () => {
     try {
-        const response = await fetch(`${API_URL}/inventory`);
-        return await response.json();
+        const response = await inventoryAPI.getAll();
+        return response.data.inventory || response.data || [];
     } catch (error) {
         console.error("Error fetching inventory:", error);
         return [];
@@ -51,16 +46,12 @@ export const getInventory = async () => {
 };
 
 // Update inventory stock (positive = add, negative = reduce)
-export const updateStock = async (productName, change) => {
+export const updateStock = async (id, quantityChange, reason) => {
     try {
-        const response = await fetch(`${API_URL}/inventory/update`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ productName, change }),
-        });
-        return await response.json();
+        const response = await inventoryAPI.updateStock(id, { quantityChange, reason });
+        return response.data.item || response.data;
     } catch (error) {
         console.error("Error updating stock:", error);
-        return null;
+        throw error;
     }
 };

@@ -1,46 +1,66 @@
-const express = require("express");
-const router = express.Router();
-const Sales = require("../models/Sales");
-const Inventory = require("../models/Inventory"); // ✅ Import Inventory model
+const mongoose = require("mongoose");
 
-// 🟢 Add a new sale (with stock validation)
-router.post("/", async (req, res) => {
-    try {
-        const { productName, category, quantity, price, customerName } = req.body;
-        const totalAmount = quantity * price;
-
-        // ✅ Check if the product exists in inventory
-        const inventoryItem = await Inventory.findOne({ productName });
-
-        if (!inventoryItem) {
-            return res.status(404).json({ error: "Product not found in inventory" });
-        }
-
-        // ✅ Check if stock is sufficient
-        if (inventoryItem.stock < quantity) {
-            return res.status(400).json({ error: "Insufficient stock!" });
-        }
-
-        // ✅ Reduce stock in inventory
-        inventoryItem.stock -= quantity;
-        await inventoryItem.save();
-
-        // ✅ Record the sale
-        const newSale = new Sales({
-            productName,
-            category,
-            quantity,
-            price,
-            totalAmount,
-            customerName
-        });
-
-        await newSale.save();
-        res.status(201).json({ message: "Sale recorded successfully", sale: newSale });
-
-    } catch (error) {
-        res.status(500).json({ error: "Error recording sale" });
+const salesSchema = new mongoose.Schema({
+    productName: {
+        type: String,
+        required: [true, "Product name is required"],
+        trim: true
+    },
+    productId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Inventory",
+        required: false
+    },
+    category: {
+        type: String,
+        required: [true, "Category is required"],
+        trim: true
+    },
+    quantity: {
+        type: Number,
+        required: [true, "Quantity is required"],
+        min: [1, "Quantity must be at least 1"]
+    },
+    price: {
+        type: Number,
+        required: [true, "Price is required"],
+        min: [0, "Price cannot be negative"]
+    },
+    totalAmount: {
+        type: Number,
+        required: true,
+        min: [0, "Total amount cannot be negative"]
+    },
+    customerName: {
+        type: String,
+        trim: true,
+        default: "Walk-in Customer"
+    },
+    customerPhone: {
+        type: String,
+        trim: true
+    },
+    paymentMethod: {
+        type: String,
+        enum: ["cash", "card", "online"],
+        default: "cash"
+    },
+    orderStatus: {
+        type: String,
+        enum: ["completed", "pending", "cancelled"],
+        default: "completed"
+    },
+    date: {
+        type: Date,
+        default: Date.now
     }
+}, {
+    timestamps: true
 });
 
-module.exports = router;
+// Index for faster queries
+salesSchema.index({ date: -1 });
+salesSchema.index({ productId: 1 });
+salesSchema.index({ customerName: 1 });
+
+module.exports = mongoose.model("Sales", salesSchema);

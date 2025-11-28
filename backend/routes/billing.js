@@ -1,63 +1,127 @@
 const express = require("express");
 const router = express.Router();
 const Sales = require("../models/Sales");
+const Inventory = require("../models/Inventory");
+const { protect } = require("../middleware/auth");
+const { validate, schemas } = require("../middleware/validator");
+const { asyncHandler, createError } = require("../middleware/errorHandler");
+const { checkLowStock } = require("../utils/notifications");
 
-// 🟢 Add a new sale
-router.post("/", async (req, res) => {
-    try {
-        const { productName, category, quantity, price, customerName } = req.body;
-        const totalAmount = quantity * price;
+// Note: Billing routes for backward compatibility
+// New code should use /api/sales routes
 
-        const newSale = new Sales({
-            productName,
-            category,
-            quantity,
-            price,
-            totalAmount,
-            customerName
-        });
+// @route   GET /api/billing
+// @desc    Get all sales (backward compatibility)
+// @access  Private
+router.get("/", protect, asyncHandler(async (req, res) => {
+    const sales = await Sales.find().sort({ date: -1 }).populate("productId").limit(100);
+    res.json({
+        status: "success",
+        sales
+    });
+}));
 
-        await newSale.save();
-        res.status(201).json({ message: "Sale recorded successfully", sale: newSale });
-    } catch (error) {
-        res.status(500).json({ error: "Error recording sale" });
+// @route   POST /api/billing
+// @desc    Add a new sale (backward compatibility - with stock validation)
+// @access  Private
+router.post("/", protect, validate(schemas.createSale), asyncHandler(async (req, res) => {
+    const { productName, productId, category, quantity, price, customerName, customerPhone, paymentMethod } = req.body;
+    
+    // Find product in inventory
+    let inventoryItem;
+    if (productId) {
+        inventoryItem = await Inventory.findById(productId);
+    } else {
+        inventoryItem = await Inventory.findOne({ name: productName });
     }
-});
-
-// 🟢 Get all sales
-router.get("/", async (req, res) => {
-    try {
-        const sales = await Sales.find().sort({ date: -1 });
-        res.status(200).json(sales);
-    } catch (error) {
-        res.status(500).json({ error: "Error fetching sales" });
+    
+    if (!inventoryItem) {
+        throw createError("Product not found in inventory", 404);
     }
-});
+    
+    // Check if stock is sufficient
+    if (!inventoryItem.hasSufficientStock(quantity)) {
+        throw createError(`Insufficient stock! Available: ${inventoryItem.quantity}`, 400);
+    }
+    
+    // Reduce stock
+    inventoryItem.quantity -= quantity;
+    
+    // Update status if out of stock
+    if (inventoryItem.quantity === 0) {
+        inventoryItem.status = "out_of_stock";
+    }
+    
+    await inventoryItem.save();
+    
+    // Calculate total
+    const totalAmount = quantity * price;
+    
+    // Create sale record
+    const newSale = await Sales.create({
+        productName: inventoryItem.name,
+        productId: inventoryItem._id,
+        category: category || inventoryItem.category,
+        quantity,
+        price,
+        totalAmount,
+        customerName: customerName || "Walk-in Customer",
+        customerPhone,
+        paymentMethod: paymentMethod || "cash",
+        orderStatus: "completed"
+    });
+    
+    // Check for low stock after sale
+    await checkLowStock(inventoryItem);
+    
+    res.status(201).json({
+        status: "success",
+        message: "Sale recorded successfully",
+        sale: newSale
+    });
+}));
 
-// 🟢 Get a specific sale by ID
-router.get("/:id", async (req, res) => {
-    try {
-        const sale = await Sales.findById(req.params.id);
-        if (!sale) {
-            return res.status(404).json({ error: "Sale not found" });
+// @route   GET /api/billing/:id
+// @desc    Get single sale
+// @access  Private
+router.get("/:id", protect, asyncHandler(async (req, res) => {
+    const sale = await Sales.findById(req.params.id).populate("productId");
+    if (!sale) {
+        throw createError("Sale not found", 404);
+    }
+    res.json({
+        status: "success",
+        sale
+    });
+}));
+
+// @route   DELETE /api/billing/:id
+// @desc    Delete sale (and restore stock)
+// @access  Private
+router.delete("/:id", protect, asyncHandler(async (req, res) => {
+    const sale = await Sales.findById(req.params.id);
+    if (!sale) {
+        throw createError("Sale not found", 404);
+    }
+    
+    // Restore stock if product exists
+    if (sale.productId) {
+        const inventoryItem = await Inventory.findById(sale.productId);
+        if (inventoryItem) {
+            inventoryItem.quantity += sale.quantity;
+            if (inventoryItem.status === "out_of_stock" && inventoryItem.quantity > 0) {
+                inventoryItem.status = "active";
+            }
+            await inventoryItem.save();
         }
-        res.status(200).json(sale);
-    } catch (error) {
-        res.status(500).json({ error: "Error fetching sale" });
     }
-});
-
-// 🟢 Delete a sale
-router.delete("/:id", async (req, res) => {
-    try {
-        const sale = await Sales.findByIdAndDelete(req.params.id);
-        if (!sale) {
-            return res.status(404).json({ error: "Sale not found" });
-        }
-        res.status(200).json({ message: "Sale deleted successfully" });
-    } catch (error) {
-        res.status(500).json({ error: "Error deleting sale" });
-    }
-});
+    
+    await Sales.findByIdAndDelete(req.params.id);
+    
+    res.json({
+        status: "success",
+        message: "Sale deleted and stock restored successfully"
+    });
+}));
 
 module.exports = router;
